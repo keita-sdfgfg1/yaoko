@@ -1,0 +1,24 @@
+name: Save Tokubai Leaflet to Dropbox
+
+on:
+  schedule:
+    - cron: "0 23 * * *"  # UTC 23:00 = JST 08:00
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install -U pip
+          pip install requests beautifulsoup4 pillow dropbox
+      - name: Run script
+        env:
+          DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
+          # 検出が不安定なら一時的に保険で指定（安定後は削除OK）
+          # FALLBACK_PRINT_URL: "https://tokubai.co.jp/%E3%83%A4%E3%82%AA%E3%82%B3%E3%83%BC/14997/leaflets/93706324/print"
+        run: python your_script.py
