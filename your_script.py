@@ -67,12 +67,26 @@ def extract_leaflet_ids_from_html(html: str) -> Set[str]:
 
 def find_all_leaflet_print_urls() -> List[str]:
     ids: Set[str] = set()
-    ids |= extract_leaflet_ids_from_html(http_get(STORE_URL).text)
-    ids |= extract_leaflet_ids_from_html(http_get(urljoin(STORE_URL, "./leaflets")).text)
+
+    # 店舗トップ
+    try:
+        ids |= extract_leaflet_ids_from_html(http_get(STORE_URL).text)
+    except Exception as e:
+        print("店舗トップ取得失敗:", e)
+
+    # /leaflets 一覧（存在しない場合はスキップ）
+    try:
+        ids |= extract_leaflet_ids_from_html(http_get(urljoin(STORE_URL, "leaflets")).text)
+    except Exception:
+        print("leaflets ページなし → スキップ")
+
     if not ids:
         raise RuntimeError("leaflet ID が見つかりませんでした")
+
+    # 新しい順に上位 MAX_LEAFLETS 件を返す
     sorted_ids = sorted(ids, key=lambda x: int(x), reverse=True)[:MAX_LEAFLETS]
     return [build_print_url_from_id(i) for i in sorted_ids]
+
 
 # ------------ 画像収集 ------------
 def collect_images_from_html(html: str) -> List[str]:
@@ -190,3 +204,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
