@@ -183,7 +183,7 @@ def dropbox_client():
     sk = os.getenv("DROPBOX_APP_SECRET")
 
     if rf and ak and sk:
-        # ここでSDKが必要に応じて短期アクセストークンを自動更新してくれる
+        # SDK が必要に応じて短期アクセストークンを自動更新してくれる
         return dropbox.Dropbox(
             oauth2_refresh_token=rf,
             app_key=ak,
@@ -191,17 +191,16 @@ def dropbox_client():
             timeout=90,
         )
 
-    # 旧方式（短期アクセストークン）。期限切れなら失敗するので常用は非推奨
+    # 旧方式（非推奨）
     token = os.getenv("DROPBOX_ACCESS_TOKEN")
     if token:
         return dropbox.Dropbox(token, timeout=90)
 
     raise RuntimeError(
-        "Dropbox 認証情報がありません。"
+        "Dropbox 認証情報がありません。\n"
         "DROPBOX_REFRESH_TOKEN / DROPBOX_APP_KEY / DROPBOX_APP_SECRET "
         "（推奨）または DROPBOX_ACCESS_TOKEN を設定してください。"
     )
-
 
 def ensure_folder(dbx, path: str):
     try: dbx.files_create_folder_v2(path)
@@ -247,4 +246,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
