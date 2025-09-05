@@ -2,7 +2,7 @@ name: Save Tokubai Leaflet to Dropbox
 
 on:
   schedule:
-    - cron: "0 23 * * *"   # JST 08:00 毎日
+    - cron: "0 23 * * *"   # JST 08:00
   workflow_dispatch: {}
 
 jobs:
@@ -15,7 +15,7 @@ jobs:
       - id: mk
         run: |
           LIST=$(jq -c '[ .[] | { store_url: .url, store_chain: .name } ] | { include: . }' stores.json)
-          echo "list=${LIST}" >> $GITHUB_OUTPUT
+          echo "list=${LIST}" >> "$GITHUB_OUTPUT"
 
   run:
     needs: make-matrix
@@ -31,10 +31,20 @@ jobs:
       - run: |
           pip install -U pip
           pip install requests beautifulsoup4 pillow dropbox
+
+      # ← ここが実行ステップ。Secrets を env で注入します
       - name: Run script for one store
         env:
-          DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
+          # スクリプト既存のパラメータ
           STORE_URL:   ${{ matrix.store_url }}
           STORE_CHAIN: ${{ matrix.store_chain }}
           DROPBOX_ROOT: "/Tokubai"
+
+          # Dropbox（Refresh Token 方式に必要な3つ）
+          DROPBOX_APP_KEY:        ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET:     ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN:  ${{ secrets.DROPBOX_REFRESH_TOKEN }}
+
+          # （旧式の短期トークンを併用したい時だけ）
+          # DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
         run: python your_script.py
