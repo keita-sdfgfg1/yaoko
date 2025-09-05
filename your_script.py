@@ -173,9 +173,35 @@ def images_to_pdf(pngs: List[str], out_pdf: str):
 
 # ------------ Dropbox ------------
 def dropbox_client():
+    """
+    Dropbox SDK を Refresh Token 方式で初期化。
+    - 環境変数に REFRESH_TOKEN / APP_KEY / APP_SECRET があればそれを使う（推奨）
+    - なければ旧式の ACCESS_TOKEN にフォールバック（手動デバッグ用）
+    """
+    rf = os.getenv("DROPBOX_REFRESH_TOKEN")
+    ak = os.getenv("DROPBOX_APP_KEY")
+    sk = os.getenv("DROPBOX_APP_SECRET")
+
+    if rf and ak and sk:
+        # ここでSDKが必要に応じて短期アクセストークンを自動更新してくれる
+        return dropbox.Dropbox(
+            oauth2_refresh_token=rf,
+            app_key=ak,
+            app_secret=sk,
+            timeout=90,
+        )
+
+    # 旧方式（短期アクセストークン）。期限切れなら失敗するので常用は非推奨
     token = os.getenv("DROPBOX_ACCESS_TOKEN")
-    if not token: raise RuntimeError("DROPBOX_ACCESS_TOKEN 未設定")
-    return dropbox.Dropbox(token, timeout=90)
+    if token:
+        return dropbox.Dropbox(token, timeout=90)
+
+    raise RuntimeError(
+        "Dropbox 認証情報がありません。"
+        "DROPBOX_REFRESH_TOKEN / DROPBOX_APP_KEY / DROPBOX_APP_SECRET "
+        "（推奨）または DROPBOX_ACCESS_TOKEN を設定してください。"
+    )
+
 
 def ensure_folder(dbx, path: str):
     try: dbx.files_create_folder_v2(path)
@@ -221,3 +247,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
