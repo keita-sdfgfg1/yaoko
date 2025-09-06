@@ -3,6 +3,7 @@ import os
 import re
 import time
 from typing import List, Optional
+from urllib.parse import quote
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -34,13 +35,14 @@ def http_get(url: str, referer: Optional[str] = None, retry: int = RETRY) -> req
         try:
             headers = HEADERS_BASE.copy()
             if referer:
-                headers["Referer"] = referer
+                # 日本語URLをそのままヘッダに入れないようにする
+                safe_referer = referer.encode("utf-8")
+                headers["Referer"] = quote(referer, safe=":/?#[]@!$&'()*+,;=")
             r = sess.get(url, headers=headers, timeout=TIMEOUT, allow_redirects=True)
             r.raise_for_status()
             return r
         except requests.HTTPError as e:
             last_err = e
-            # 一時的エラー/禁止は待って再試行
             code = getattr(e.response, "status_code", None)
             if code in (403, 404, 429, 500, 502, 503, 504):
                 time.sleep(1.2 * (i + 1))
@@ -248,3 +250,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
