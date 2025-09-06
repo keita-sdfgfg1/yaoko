@@ -5,7 +5,6 @@ import requests
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from PIL import Image
-from fpdf import FPDF
 import dropbox
 from datetime import datetime, timedelta, timezone
 
@@ -167,13 +166,12 @@ def dropbox_file_exists(dbx, path: str) -> bool:
 
 # -------- PDF化 --------
 def make_pdf(img_paths: list[str], out_pdf: str):
-    pdf = FPDF()
-    for img in img_paths:
-        cover = Image.open(img)
-        w, h = cover.size
-        pdf.add_page()
-        pdf.image(img, 0, 0, 210, 297)  # A4埋め込み
-    pdf.output(out_pdf, "F")
+    # すべてRGBにして1つのPDFへ
+    pages = [Image.open(p).convert("RGB") for p in img_paths]
+    if not pages:
+        return
+    first, rest = pages[0], pages[1:]
+    first.save(out_pdf, save_all=True, append_images=rest)
 
 # -------- Main --------
 def main():
@@ -199,3 +197,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
