@@ -2,9 +2,9 @@
 import os
 import re
 import time
+from io import BytesIO
 from typing import List, Optional
-from urllib.parse import quote
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -28,15 +28,17 @@ DOWNLOAD_DIR = "downloads"  # ローカルの一時保存
 
 # ===== HTTPユーティリティ =====
 def http_get(url: str, referer: Optional[str] = None, retry: int = RETRY) -> requests.Response:
-    """UA/Referer付き + リトライ付き GET"""
+    """
+    UA/Referer付き + リトライ付き GET。
+    日本語URLの Referer は必ずパーセントエンコードしてヘッダに入れる。
+    """
     sess = requests.Session()
     last_err = None
     for i in range(retry):
         try:
             headers = HEADERS_BASE.copy()
             if referer:
-                # 日本語URLをそのままヘッダに入れないようにする
-                safe_referer = referer.encode("utf-8")
+                # 日本語やスペースをヘッダに直接入れない
                 headers["Referer"] = quote(referer, safe=":/?#[]@!$&'()*+,;=")
             r = sess.get(url, headers=headers, timeout=TIMEOUT, allow_redirects=True)
             r.raise_for_status()
@@ -44,6 +46,7 @@ def http_get(url: str, referer: Optional[str] = None, retry: int = RETRY) -> req
         except requests.HTTPError as e:
             last_err = e
             code = getattr(e.response, "status_code", None)
+            # 一時的エラー/拒否は少し待ってリトライ
             if code in (403, 404, 429, 500, 502, 503, 504):
                 time.sleep(1.2 * (i + 1))
                 continue
@@ -67,7 +70,11 @@ def extract_leaflet_ids_from_html(html: str) -> List[str]:
     return sorted(ids, key=lambda x: int(x), reverse=True)
 
 def find_all_leaflet_print_urls(store_url: str) -> List[str]:
-    """/leaflets が 403/404 なら店舗トップから抽出にフォールバック"""
+    """
+    1) /leaflets にアクセス
+    2) 失敗（403/404等）したら店舗トップからID抽出
+    3) 見つかった ID で /leaflets/{id}/print を組み立て
+    """
     ids: List[str] = []
     # 1) /leaflets
     try:
@@ -84,14 +91,13 @@ def find_all_leaflet_print_urls(store_url: str) -> List[str]:
         except Exception as e2:
             print("トップ取得も失敗:", e2)
 
-    # 3) それでも空ならこの店舗はSKIP
     if not ids:
         print("[SKIP] チラシIDが見つかりませんでした:", store_url)
         return []
 
     return [urljoin(store_url, f"./leaflets/{lid}/print") for lid in ids]
 
-# ===== 画像ダウンロード =====
+# ===== 画像URL収集 =====
 def collect_image_urls_from_print(html: str, base_url: str) -> List[str]:
     """printページ内の画像URL（絶対URL）を収集"""
     soup = BeautifulSoup(html, "html.parser")
@@ -100,22 +106,24 @@ def collect_image_urls_from_print(html: str, base_url: str) -> List[str]:
         src = img.get("src")
         if not src:
             continue
-        # 絶対URLへ
         absurl = urljoin(base_url, src)
-        # 拡張子でざっくり絞る
+        # よく出る拡張子だけ拾う（PNG/JPG/WEBPなど）
         if any(absurl.lower().split("?")[0].endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp")):
             urls.append(absurl)
-    # 重複除去を維持
-    seen = set()
-    out = []
+    # 重複除去
+    seen, out = set(), []
     for u in urls:
         if u not in seen:
             seen.add(u)
             out.append(u)
     return out
 
-def download_print_images(print_url: str) -> List[str]:
-    """printページから画像をダウンロードしてローカルに保存し、パス一覧を返す"""
+# ===== 画像ダウンロード（JPG化） =====
+def download_print_images_as_jpgs(print_url: str) -> List[str]:
+    """
+    printページから画像を取得 → すべて JPG（RGB）に変換して保存。
+    戻り値：ローカルに保存した JPG のパス一覧。
+    """
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     html = http_get(print_url, referer=print_url).text
@@ -125,23 +133,16 @@ def download_print_images(print_url: str) -> List[str]:
 
     saved = []
     for idx, u in enumerate(img_urls, 1):
-        ext = os.path.splitext(urlparse(u).path)[1] or ".png"
-        local = os.path.join(DOWNLOAD_DIR, f"leaflet_{os.getpid()}_{idx}{ext}")
+        # ローカルJPGファイル名
+        local = os.path.join(DOWNLOAD_DIR, f"leaflet_{os.getpid()}_{idx}.jpg")
         r = http_get(u, referer=print_url)
-        with open(local, "wb") as f:
-            f.write(r.content)
+        # 画像を開いてJPGに変換（RGBA/WebP等でもOK）
+        with Image.open(BytesIO(r.content)) as im:
+            rgb = im.convert("RGB")
+            rgb.save(local, format="JPEG", quality=92, optimize=True)
         saved.append(local)
-        print("saved image:", local)
+        print("saved jpg:", local)
     return saved
-
-# ===== PDF作成（Pillowのみ） =====
-def make_pdf(img_paths: List[str], out_pdf: str):
-    if not img_paths:
-        return
-    imgs = [Image.open(p).convert("RGB") for p in img_paths]
-    base, rest = imgs[0], imgs[1:]
-    base.save(out_pdf, save_all=True, append_images=rest)
-    print("made pdf:", out_pdf)
 
 # ===== Dropbox =====
 def dropbox_client():
@@ -165,10 +166,8 @@ def ensure_folder(dbx: dropbox.Dropbox, path: str):
     try:
         dbx.files_create_folder_v2(path)
     except dropbox.exceptions.ApiError as e:
-        # 既存は正常
         if "conflict" in str(e).lower():
             return
-        # それ以外は再スロー
         raise
 
 def any_file_with_id_exists(dbx: dropbox.Dropbox, base_dir: str, leaflet_id: str) -> bool:
@@ -177,7 +176,7 @@ def any_file_with_id_exists(dbx: dropbox.Dropbox, base_dir: str, leaflet_id: str
         result = dbx.files_list_folder(base_dir, recursive=True)
     except dropbox.exceptions.ApiError:
         return False
-    needle = f"_{leaflet_id}"
+    needle = f"_{leaflet_id}_"
     def hit(res):
         for e in res.entries:
             if hasattr(e, "name") and needle in e.name:
@@ -202,11 +201,11 @@ def main():
     if not store_url:
         raise RuntimeError("STORE_URL が未設定です")
 
-    # 企業（チェーン）名はURLの1セグメント目、日本語OK。店舗IDは次のセグメント。
+    # 企業（チェーン）名はURLの1セグメント目（日本語OK）
     path_parts = urlparse(store_url).path.strip("/").split("/")
     chain_name = path_parts[0] if len(path_parts) >= 1 else "store"
     shop_id = path_parts[1] if len(path_parts) >= 2 else "shop"
-    store_name = chain_name   # 保存先のフォルダ名はチェーン名でOK
+    store_name = chain_name  # 保存先フォルダ名として使用
 
     print(f"===== {store_name} / {shop_id} =====")
     print_urls = find_all_leaflet_print_urls(store_url)
@@ -217,37 +216,29 @@ def main():
     dbx = dropbox_client()
     base_dir = f"/{store_name}"
     ensure_folder(dbx, base_dir)
+    today = datetime.now(JST).strftime("%Y-%m-%d")
 
     for purl in print_urls:
         m = LEAFLET_ID_RE.search(purl)
         leaflet_id = m.group(1) if m else "leaflet"
+
         # 既に同じIDのファイルが存在するならスキップ
         if any_file_with_id_exists(dbx, base_dir, leaflet_id):
             print(f"[SKIP] 既に同じIDのファイルあり: {leaflet_id}")
             continue
 
-        # 画像取得
-        imgs = download_print_images(purl)
-        if not imgs:
+        # JPG取得
+        jpgs = download_print_images_as_jpgs(purl)
+        if not jpgs:
             print("[SKIP] 画像無し:", purl)
             continue
 
-        # JST日付入りのファイル名でアップロード
-        today = datetime.now(JST).strftime("%Y-%m-%d")
-
-        # PNG
-        for i, p in enumerate(imgs, 1):
-            ext = os.path.splitext(p)[1] or ".png"
-            fname = f"{store_name}_{today}_{leaflet_id}_p{i}{ext}"
+        # JPG をアップロード（PDFは作らない）
+        for i, p in enumerate(jpgs, 1):
+            fname = f"{store_name}_{today}_{leaflet_id}_p{i}.jpg"
             upload(dbx, p, f"{base_dir}/{fname}")
-
-        # PDF
-        out_pdf_local = os.path.join(DOWNLOAD_DIR, f"{store_name}_{today}_{leaflet_id}.pdf")
-        make_pdf(imgs, out_pdf_local)
-        upload(dbx, out_pdf_local, f"{base_dir}/{os.path.basename(out_pdf_local)}")
 
     print("Done.")
 
 if __name__ == "__main__":
     main()
-
